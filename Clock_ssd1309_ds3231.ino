@@ -22,52 +22,49 @@ U8G2_SSD1309_128X64_NONAME0_F_4W_HW_SPI u8g2(U8G2_R0, /* cs=*/ 10, /* dc=*/ 9, /
 
 // Buttons section
 //////////////////
+
 #define BTN_UP 128
 #define BTN_SET 64
 #define BTN_DOWN 32
 
-uint8_t btnState;
-uint8_t btnChanged;
+namespace Buttons {
+  uint8_t state;
+  uint8_t changed;
 
-
-void updateButtons(void) {
-  btnChanged = btnState ^ (PIND & (BTN_UP | BTN_DOWN | BTN_SET));
-  btnState = PIND & (BTN_UP | BTN_DOWN | BTN_SET);
-  if (btnChanged && btnState ^ (BTN_UP | BTN_DOWN | BTN_SET)) {
-    tone(4, 2000);
+  void update(void) {
+    changed = state ^ (PIND & (BTN_UP | BTN_DOWN | BTN_SET));
+    state = PIND & (BTN_UP | BTN_DOWN | BTN_SET);
+    if (changed && state ^ (BTN_UP | BTN_DOWN | BTN_SET)) {
+      tone(4, 2000, 50);
+      delay(50);
+    }
   }
-  delay(50);
-  noTone(4);
-}
 
-bool pressed(const uint8_t button) {
-  return !(btnState & button);
-}
+  bool pressed(const uint8_t button) {
+    return !(state & button);
+  }
 
-bool justPressed(const uint8_t button) {
-  return pressed(button) && (btnChanged & button);
+  bool justPressed(const uint8_t button) {
+    return pressed(button) && (changed & button);
+  }
 }
-
-// End of buttons section
 
 uint16_t dateToAlarmTime(uint8_t minute, uint8_t hour, uint8_t day) {
 	return minute | hour << 6 | day << 11;
 }
 
-void setup(void) {
-  // RTC
-  Wire.begin();
-
-  // Display
-  u8g2.begin();
-
-  // Buttons
-  pinMode(5, INPUT_PULLUP);
-  pinMode(6, INPUT_PULLUP);
-  pinMode(7, INPUT_PULLUP);
-
-  // Buzzer
-  pinMode(4, OUTPUT);
+uint8_t monthLength(uint8_t month, uint8_t year) {
+  if (month == 4 || month == 6 || month == 9 || month == 11)
+    return 30;
+  if (month == 2)
+  {
+    // Leap Year
+    if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0))
+      return 29;
+    else
+      return 28;
+  }
+  return 31;
 }
 
 void padWithChar(uint8_t number, uint8_t padding, char pad) {
@@ -113,20 +110,6 @@ void displayDate(uint8_t day, uint8_t month, uint8_t year) {
   u8g2.print(".20");
   digit = year;
   padWithZero(digit, 2);
-}
-
-uint8_t monthLength(uint8_t month, uint8_t year) {
-  if (month == 4 || month == 6 || month == 9 || month == 11)
-    return 30;
-  if (month == 2)
-  {
-    // Leap Year
-    if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0))
-      return 29;
-    else
-      return 28;
-  }
-  return 31;
 }
 
 void displayWeekDays(void) {
@@ -227,19 +210,19 @@ void setDateAndTimeMenu(void) {
 
   u8g2.setFont(u8g2_font_5x7_tf);
   for (;;) {
-    updateButtons();
-    if ((pressed(BTN_UP) || pressed(BTN_DOWN))) {
+    Buttons::update();
+    if ((Buttons::pressed(BTN_UP) || Buttons::pressed(BTN_DOWN))) {
       if (adjState && setState < num_settings) {
-        newTime[setState] = (limitHi[setState] + newTime[setState] - limitLo[setState] + pressed(BTN_UP) - pressed(BTN_DOWN)) % limitHi[setState] + limitLo[setState];
+        newTime[setState] = (limitHi[setState] + newTime[setState] - limitLo[setState] + Buttons::pressed(BTN_UP) - Buttons::pressed(BTN_DOWN)) % limitHi[setState] + limitLo[setState];
       } else {
-        setState = (num_states + setState + pressed(BTN_UP) - pressed(BTN_DOWN)) % num_states;
+        setState = (num_states + setState + Buttons::pressed(BTN_UP) - Buttons::pressed(BTN_DOWN)) % num_states;
         limitHi[5] = monthLength(newTime[4], newTime[3]);
         if (newTime[5] > limitHi[5]) {
           newTime[5] = limitHi[5];
         }
       }
     }
-    if (justPressed(BTN_SET)) {
+    if (Buttons::justPressed(BTN_SET)) {
       if (setState < num_settings) {
         adjState = !adjState;
       } else if (setState == 7) {
@@ -292,7 +275,7 @@ void settingsMenu(void) {
   u8g2.setFont(u8g2_font_5x7_tf);
 
   do {
-    updateButtons();
+    Buttons::update();
     u8g2.clearBuffer();
     u8g2.setCursor(0, u8g2.getMaxCharHeight());
     u8g2.print(F("Set date and time"));
@@ -300,28 +283,44 @@ void settingsMenu(void) {
     u8g2.print(F("Exit"));
     u8g2.sendBuffer();
     delay(100);
-    if (justPressed(BTN_UP)) {
+    if (Buttons::justPressed(BTN_UP)) {
       setDateAndTimeMenu();
     }
-  } while (! justPressed(BTN_DOWN));
+  } while (! Buttons::justPressed(BTN_DOWN));
+}
+
+void setup(void) {
+  // RTC
+  Wire.begin();
+
+  // Display
+  u8g2.begin();
+
+  // Buttons
+  pinMode(5, INPUT_PULLUP);
+  pinMode(6, INPUT_PULLUP);
+  pinMode(7, INPUT_PULLUP);
+
+  // Buzzer
+  pinMode(4, OUTPUT);
 }
 
 void loop(void) {
   const uint8_t num_states = 3;
   static uint8_t upd_sec, state = 0;
   rtc.refresh();
-  updateButtons();
+  Buttons::update();
 
-  if (btnChanged) {
-    state = (state + num_states + justPressed(BTN_UP) - justPressed(BTN_DOWN)) % num_states;
+  if (Buttons::changed) {
+    state = (state + num_states + Buttons::justPressed(BTN_UP) - Buttons::justPressed(BTN_DOWN)) % num_states;
   }
 
-  if (justPressed(BTN_SET)) {
+  if (Buttons::justPressed(BTN_SET)) {
     //    settingsMenu();
     setDateAndTimeMenu();
   }
 
-  if (upd_sec == rtc.second() && !btnChanged) return;
+  if (upd_sec == rtc.second() && !Buttons::changed) return;
   upd_sec = rtc.second();
   u8g2.clearBuffer();
   //  u8g2.firstPage();
