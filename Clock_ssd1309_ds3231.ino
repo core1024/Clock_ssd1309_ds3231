@@ -122,11 +122,17 @@ namespace Buttons {
   }
 }
 
-// Pure functions
+// Alarm functions
 
-uint16_t dateToAlarmTime(uint8_t minute, uint8_t hour, uint8_t day) {
-	return minute | hour << 6 | day << 11;
-}
+struct alarm_t {
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t days;
+};
+
+struct alarm_t alarm;
+
+uint32_t next_alarm;
 
 uint8_t monthLength(uint8_t month, uint8_t year) {
   if (month == 4 || month == 6 || month == 9 || month == 11)
@@ -142,19 +148,84 @@ uint8_t monthLength(uint8_t month, uint8_t year) {
   return 31;
 }
 
-// Helper functions with side effects
+// 6  5  5  4  7
+// 63 31 31 15 127
+// 59 23 31 12 99
 
-void padWithChar(uint8_t number, uint8_t padding, char pad) {
-  if (padding > 1) {
-    for (int power = pow(10, padding - 1); power > 9 && power > number; power /= 10) {
-      u8g2.print(pad);
+uint32_t dateToAlarm(uint8_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute) {
+  return (uint32_t)((uint32_t)minute | ((uint32_t)hour << 6) | (((uint32_t)day - 1) << 11) | (uint32_t)month << 16 | ((uint32_t)year << 20));
+}
+
+uint8_t alarmMinute(uint32_t alarm_time) {
+  return alarm_time & 63;
+}
+
+uint8_t alarmHour(uint32_t alarm_time) {
+  return (alarm_time >> 6) & 31;
+}
+
+uint8_t alarmDay(uint32_t alarm_time) {
+  return ((alarm_time >> 11) & 31) + 1;
+}
+
+uint8_t alarmMonth(uint32_t alarm_time) {
+  return (alarm_time >> 16) & 15;
+}
+
+uint8_t alarmYear(uint32_t alarm_time) {
+  return (alarm_time >> 20) & 127;
+}
+
+uint32_t nowToAlarm(void) {
+  return dateToAlarm(rtc.year(), rtc.month(), rtc.day(), rtc.hour(), rtc.minute());
+}
+
+uint32_t alarmNext(struct alarm_t alarm) {
+  // FIXME: ~0 is not the best solution here
+  if(! alarm.days) return ~0; // Alarm is off
+  rtc.refresh();
+  uint8_t dow = (rtc.dayOfWeek() + 5) % 7;
+  uint8_t year = rtc.year();
+  uint8_t month = rtc.month();
+  uint8_t day = rtc.day();
+  uint8_t mLen = monthLength(month, 2000 + year);
+  uint32_t atNow = nowToAlarm();
+  uint32_t atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
+  while((alarm.days & (1 << dow)) == 0 || atNow > atAlarm) {
+    dow = (dow + 1) % 7;
+    day++;
+    if(day > mLen) {
+      day = 1;
+      month++;
+      if(month > 12) {
+        month = 1;
+        year++;
+      }
     }
+    atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
+  }
+  return atAlarm;
+}
+
+// FIXME: If I decide to support more alarms, this is a big no-no
+void storeAlarm(void) {
+  rtc.eeprom_write(0, next_alarm);
+  rtc.eeprom_write(4, (byte *) &alarm, sizeof(alarm_t));
+}
+
+// Helper functions with side effects
+void padWithSingleChar(uint8_t number, char pad) {
+  if(number < 10) {
+    u8g2.print(pad);
   }
   u8g2.print(number);
 }
 
-void padWithZero(uint8_t number, uint8_t padding) {
-  padWithChar(number, padding, '0');
+void padWithSingleZero(uint8_t number) {
+  if(number < 10) {
+    u8g2.print('0');
+  }
+  u8g2.print(number);
 }
 
 void txtGoTo(uint8_t x, uint8_t y) {
@@ -169,25 +240,36 @@ void txtNextRow(uint8_t x) {
 // Printing functions
 
 void displayTime(uint8_t hour, uint8_t minute, uint8_t seconds) {
-  padWithZero(hour, 2);
+  padWithSingleZero(hour);
 
   u8g2.print(':');
-  padWithZero(minute, 2);
+  padWithSingleZero(minute);
 
   if (seconds < 60) {
     u8g2.print(':');
-    padWithZero(seconds, 2);
+    padWithSingleZero(seconds);
   }
 }
 
 void displayDate(uint8_t day, uint8_t month, uint8_t year) {
-  padWithZero(day, 2);
+  padWithSingleZero(day);
 
   u8g2.print('.');
-  padWithZero(month, 2);
+  padWithSingleZero(month);
 
-  u8g2.print(".2");
-  padWithZero(year, 3);
+  u8g2.print(".20");
+  padWithSingleZero(year);
+}
+
+void displayISODate(uint8_t day, uint8_t month, uint8_t year) {
+  u8g2.print("20");
+  padWithSingleZero(year);
+
+  u8g2.print("-");
+  padWithSingleZero(month);
+
+  u8g2.print('-');
+  padWithSingleZero(day);
 }
 
 void displayWeekDays(void) {
@@ -225,7 +307,7 @@ void infoAll(void) {
       if (mDay < 1 || mDay > mLen) {
         u8g2.print(F("   "));
       } else {
-        padWithChar(mDay, 2, ' ');
+        padWithSingleChar(mDay, ' ');
         u8g2.print(' ');
         if (mDay == today) {
           u8g2.setDrawColor(2);
@@ -265,6 +347,44 @@ void infoTimeDate(void) {
     slide += dir;
     if (slide > 14 || slide < 1) dir = -dir;
   }
+}
+
+void infoAlarm(void) {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_profont17_tn);
+    u8g2.setCursor(0, 0);
+    txtNextRow(0);
+    uint8_t minutes = (60 + alarmMinute(next_alarm) - rtc.minute() - 1) % 60;
+    uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() >= alarmMinute(next_alarm))) % 24;
+    uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() >= alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
+    padWithSingleZero(days);
+    u8g2.print(F("  "));
+    padWithSingleZero(hours);
+    u8g2.print(F("  "));
+    padWithSingleZero(minutes);
+    u8g2.print(F("  "));
+    padWithSingleZero((59 - rtc.second()));
+
+    u8g2.setFont(u8g2_font_5x7_tf);
+    txtNextRow(0);
+    u8g2.print(F("days   hours  mins    secs"));
+    txtNextRow(0);
+
+    txtNextRow(2);
+
+    u8g2.print(F("Now is:  "));
+    displayISODate(rtc.day(), rtc.month(), rtc.year());
+    u8g2.print(' ');
+    displayTime(rtc.hour(), rtc.minute(), 60);
+    txtNextRow(0);
+
+    txtNextRow(2);
+    u8g2.print(F("Alarm:   "));
+    displayISODate(alarmDay(next_alarm), alarmMonth(next_alarm), alarmYear(next_alarm));
+    u8g2.print(' ');
+    displayTime(alarmHour(next_alarm), alarmMinute(next_alarm), 60);
+  } while ( u8g2.nextPage() );
 }
 
 // Settings functions
@@ -347,78 +467,6 @@ void setDateAndTimeMenu(void) {
   }
 }
 
-struct alarm_t {
-  uint8_t hour;
-  uint8_t minute;
-  uint8_t days;
-};
-
-struct alarm_t alarm;
-
-uint32_t next_alarm;
-
-// 6  5  5  4  7
-// 63 31 31 15 127
-// 59 23 31 12 99
-
-uint32_t dateToAlarm(uint8_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute) {
-  return (uint32_t)((uint32_t)minute | ((uint32_t)hour << 6) | (((uint32_t)day - 1) << 11) | (uint32_t)month << 16 | ((uint32_t)year << 20));
-}
-
-uint32_t nowToAlarm(void) {
-  return dateToAlarm(rtc.year(), rtc.month(), rtc.day(), rtc.hour(), rtc.minute());
-}
-
-uint32_t alarmNext(struct alarm_t alarm) {
-  if(! alarm.days) return ~0; // Alarm is off
-  rtc.refresh();
-  uint8_t dow = (rtc.dayOfWeek() + 5) % 7;
-  uint8_t mLen = monthLength(rtc.month(), 2000 + rtc.year());
-  uint8_t year = rtc.year();
-  uint8_t month = rtc.month();
-  uint8_t day = rtc.day();
-  uint32_t atNow = nowToAlarm();
-  uint32_t atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
-  while((alarm.days & (1 << dow)) == 0 || (atAlarm < atNow)) {
-    dow = (dow + 1) % 7;
-    day++;
-    if(day > mLen) {
-      day = 1;
-      month++;
-      if(month > 12) {
-        month = 1;
-        year++;
-      }
-    }
-    atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
-  }
-  return atAlarm;
-}
-
-uint8_t alarmMinute(uint32_t alarm_time) {
-  return alarm_time & 63;
-}
-
-uint8_t alarmHour(uint32_t alarm_time) {
-  return (alarm_time >> 6) & 31;
-}
-
-uint8_t alarmDay(uint32_t alarm_time) {
-  return ((alarm_time >> 11) & 31) + 1;
-}
-
-uint8_t alarmMonth(uint32_t alarm_time) {
-  return (alarm_time >> 16) & 15;
-}
-
-uint8_t alarmYear(uint32_t alarm_time) {
-  return (alarm_time >> 20) & 127;
-}
-
-void storeAlarm(void) {
-  rtc.eeprom_write(0, next_alarm) && rtc.eeprom_write(4, (byte *) &alarm, sizeof(alarm_t));
-}
-
 void setDateAlarmMenu(void) {
   const uint8_t num_states = 11;
   const uint8_t num_settings = 2;
@@ -495,30 +543,43 @@ void setDateAlarmMenu(void) {
   }
 }
 
-void settingsMenu(void) {
+void triggerAlarm(void) {
+  int i = 0;
+  unsigned long note_time = 0;
   u8g2.setFont(u8g2_font_5x7_tf);
-
+  u8g2.setFontMode(1);
   do {
     Buttons::update();
-    u8g2.firstPage();
-    do {
-      u8g2.setCursor(0, u8g2.getMaxCharHeight() + u8g2.getMaxCharHeight() / 2);
-      u8g2.print(F("Set date and time"));
-      u8g2.setCursor(0, u8g2.ty + 3 * u8g2.getMaxCharHeight());
-      u8g2.print(F("Set alarm"));
-      u8g2.setCursor(0, u8g2.ty + 3 * u8g2.getMaxCharHeight());
-      u8g2.print(F("Exit"));
-    } while ( u8g2.nextPage() );
-    delay(100);
-    if (Buttons::justPressed(BTN_UP)) {
-      setDateAndTimeMenu();
-      return;
+    if(millis() > note_time) {
+      const uint16_t note = pgm_read_word(&song[i]);
+      const uint16_t duration = pgm_read_word(&song[i + 1]);
+
+      if(! duration) {
+        i = 0;
+        continue;
+      }
+
+      u8g2.firstPage();
+      do {
+        u8g2.setDrawColor((i / 2) % 2);
+        u8g2.drawBox(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight());
+        u8g2.setDrawColor(2);
+        txtGoTo(7, 5);
+        u8g2.print(F("A L A R M !!!"));
+      } while ( u8g2.nextPage() );
+
+      if(note) {
+        tone(4, note, duration);
+      }
+
+      const uint16_t pauseBetweenNotes = duration * 1.3;
+      note_time = millis() + pauseBetweenNotes;
+      i += 2;
     }
-    if (Buttons::justPressed(BTN_SET)) {
-      setDateAlarmMenu();
-      return;
-    }
-  } while (! Buttons::justPressed(BTN_DOWN));
+  } while(!Buttons::changed);
+  u8g2.setDrawColor(1);
+  next_alarm = alarmNext(alarm);
+  storeAlarm();
 }
 
 void setup(void) {
@@ -552,49 +613,21 @@ void loop(void) {
   }
 
   if (Buttons::justPressed(BTN_SET)) {
-    settingsMenu();
+    switch(state) {
+      case 0:
+        setDateAndTimeMenu();
+      break;
+      case 2:
+        setDateAlarmMenu();
+      break;
+    }
   }
 
   if (upd_sec == rtc.second() && !Buttons::changed) return;
   upd_sec = rtc.second();
 
   if(next_alarm <= nowToAlarm()) {
-    int i = 0;
-    unsigned long note_time = 0;
-    u8g2.setFont(u8g2_font_5x7_tf);
-    u8g2.setFontMode(1);
-    do {
-      Buttons::update();
-      if(millis() > note_time) {
-        const uint16_t note = pgm_read_word(&song[i]);
-        const uint16_t duration = pgm_read_word(&song[i + 1]);
-
-        if(! duration) {
-          i = 0;
-          continue;
-        }
-
-        u8g2.firstPage();
-        do {
-          u8g2.setDrawColor((i / 2) % 2);
-          u8g2.drawBox(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight());
-          u8g2.setDrawColor(2);
-          txtGoTo(7, 5);
-          u8g2.print(F("A L A R M !!!"));
-        } while ( u8g2.nextPage() );
-
-        if(note) {
-          tone(4, note, duration);
-        }
-
-        const uint16_t pauseBetweenNotes = duration * 1.3;
-        note_time = millis() + pauseBetweenNotes;
-        i += 2;
-      }
-    } while(!Buttons::changed);
-    u8g2.setDrawColor(1);
-    next_alarm = alarmNext(alarm);
-    storeAlarm();
+    triggerAlarm();
     return;
   }
 
@@ -606,26 +639,7 @@ void loop(void) {
       infoAll();
       break;
     default:
-      u8g2.setFont(u8g2_font_5x7_tf);
-
-      u8g2.firstPage();
-      do {
-        txtGoTo(0, 1);
-        displayTime(rtc.hour(), rtc.minute(), 60);
-        u8g2.print(F("     "));
-        displayDate(rtc.day(), rtc.month(), rtc.year());
-        txtNextRow(0);
-
-        displayTime(alarmHour(next_alarm), alarmMinute(next_alarm), 60);
-        u8g2.print(F("     "));
-        displayDate(alarmDay(next_alarm), alarmMonth(next_alarm), alarmYear(next_alarm));
-        txtNextRow(0);
-        u8g2.print(next_alarm <= nowToAlarm());
-        txtNextRow(0);
-        u8g2.print(next_alarm);
-        txtNextRow(0);
-        u8g2.print((rtc.dayOfWeek() + 5) % 7);
-      } while ( u8g2.nextPage() );
+      infoAlarm();
     break;
   }
 }
