@@ -356,11 +356,8 @@ void infoAlarm(void) {
     u8g2.setCursor(0, 0);
     txtNextRow(0);
     uint8_t minutes = (60 + alarmMinute(next_alarm) - rtc.minute() - 1) % 60;
-    uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() >= alarmMinute(next_alarm))) % 24;
-    uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() >= alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
-
-    // FIXME: This is hack. Anyway as of now you can't set an alarm for more than 6 days ahead
-    if(days > 7) days = 0;
+    uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() > alarmMinute(next_alarm))) % 24;
+    uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() > alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
 
     padWithSingleZero(days);
     u8g2.print(F("  "));
