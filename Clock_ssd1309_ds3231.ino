@@ -191,7 +191,7 @@ uint32_t alarmNext(struct alarm_t alarm) {
   uint8_t mLen = monthLength(month, 2000 + year);
   uint32_t atNow = nowToAlarm();
   uint32_t atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
-  while((alarm.days & (1 << dow)) == 0 || atNow > atAlarm) {
+  while((alarm.days & (1 << dow)) == 0 || atNow >= atAlarm) {
     dow = (dow + 1) % 7;
     day++;
     if(day > mLen) {
@@ -358,6 +358,10 @@ void infoAlarm(void) {
     uint8_t minutes = (60 + alarmMinute(next_alarm) - rtc.minute() - 1) % 60;
     uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() >= alarmMinute(next_alarm))) % 24;
     uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() >= alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
+
+    // FIXME: This is hack. Anyway as of now you can't set an alarm for more than 6 days ahead
+    if(days > 7) days = 0;
+
     padWithSingleZero(days);
     u8g2.print(F("  "));
     padWithSingleZero(hours);
@@ -377,9 +381,8 @@ void infoAlarm(void) {
     displayISODate(rtc.day(), rtc.month(), rtc.year());
     u8g2.print(' ');
     displayTime(rtc.hour(), rtc.minute(), 60);
-    txtNextRow(0);
-
     txtNextRow(2);
+
     u8g2.print(F("Alarm:   "));
     displayISODate(alarmDay(next_alarm), alarmMonth(next_alarm), alarmYear(next_alarm));
     u8g2.print(' ');
