@@ -188,8 +188,8 @@ uint32_t alarmNext(struct alarm_t alarm) {
   uint8_t year = rtc.year();
   uint8_t month = rtc.month();
   uint8_t day = rtc.day();
-  uint8_t mLen = monthLength(month, 2000 + year);
-  uint32_t atNow = nowToAlarm();
+  const uint8_t mLen = monthLength(month, 2000 + year);
+  const uint32_t atNow = nowToAlarm();
   uint32_t atAlarm = dateToAlarm(year, month, day, alarm.hour, alarm.minute);
   while((alarm.days & (1 << dow)) == 0 || atNow >= atAlarm) {
     dow = (dow + 1) % 7;
@@ -277,15 +277,21 @@ void displayWeekDays(void) {
 }
 
 // info state functions
+int8_t last_sec;
 
 void infoAll(void) {
-  static uint8_t slide = 0, dir = 1, last_sec;
-  uint8_t today = rtc.day();
-  uint8_t month = rtc.month();
-  uint8_t year = rtc.year();
-  uint8_t mLen = monthLength(month, 2000 + year);
-  uint8_t mStart = (7 + (rtc.dayOfWeek() + 6) % 7 - (today) % 7) % 7;
+  static int8_t slide = 0, dir = 1;
+  const uint8_t today = rtc.day();
+  const uint8_t month = rtc.month();
+  const uint8_t year = rtc.year();
+  const uint8_t mLen = monthLength(month, 2000 + year);
+  const uint8_t mStart = (7 + (rtc.dayOfWeek() + 6) % 7 - (today) % 7) % 7;
   int mDay;
+  if (last_sec / 10 == rtc.second() / 10) {
+    return;
+  }
+  last_sec = rtc.second();
+
 
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.firstPage();
@@ -320,15 +326,12 @@ void infoAll(void) {
       }
     }
   } while ( u8g2.nextPage() );
-  if (last_sec / 10 != rtc.second() / 10) {
-    last_sec = rtc.second();
-    slide += dir;
-    if (slide > 28 || slide < 1) dir = -dir;
-  }
+  slide += dir;
+  if (slide > 28 || slide < 1) dir = -dir;
 }
 
 void infoTimeDate(void) {
-  static uint8_t slide = 0, dir = 1, last_sec;
+  static uint8_t slide = 0, dir = 1;
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_profont29_tn);
@@ -350,41 +353,55 @@ void infoTimeDate(void) {
 }
 
 void infoAlarm(void) {
+  static int8_t sx = 0, sy = 0, dx = 1, dy = 1;
+  const uint8_t max_x = u8g2.getMaxCharWidth() * 16;
+  const uint8_t max_y = u8g2.getMaxCharHeight() * 8;
   u8g2.firstPage();
   do {
-    u8g2.setFont(u8g2_font_profont17_tn);
-    u8g2.setCursor(0, 0);
-    txtNextRow(0);
-    uint8_t minutes = (60 + alarmMinute(next_alarm) - rtc.minute() - 1) % 60;
-    uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() > alarmMinute(next_alarm))) % 24;
-    uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() > alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
+    if(next_alarm == ~0) {
+      u8g2.setFont(u8g2_font_5x7_tf);
+      u8g2.setCursor(sx, sy + u8g2.getMaxCharHeight());
+      u8g2.print(F("NO ALARM"));
+    } else {
+      u8g2.setFont(u8g2_font_profont17_tn);
+      u8g2.setCursor(0, 0);
+      txtNextRow(0);
+      rtc.refresh();
+      const uint8_t minutes = (60 + alarmMinute(next_alarm) - rtc.minute() - 1) % 60;
+      const uint8_t hours = (24 + alarmHour(next_alarm) - rtc.hour() - (rtc.minute() > alarmMinute(next_alarm))) % 24;
+      const uint8_t days = (monthLength(rtc.month(), rtc.year()) + alarmDay(next_alarm) - rtc.day() - (rtc.hour() > alarmHour(next_alarm))) % monthLength(rtc.month(), rtc.year());
 
-    padWithSingleZero(days);
-    u8g2.print(F("  "));
-    padWithSingleZero(hours);
-    u8g2.print(F("  "));
-    padWithSingleZero(minutes);
-    u8g2.print(F("  "));
-    padWithSingleZero((59 - rtc.second()));
+      padWithSingleZero(days);
+      u8g2.print(F("  "));
+      padWithSingleZero(hours);
+      u8g2.print(F("  "));
+      padWithSingleZero(minutes);
+      u8g2.print(F("  "));
+      padWithSingleZero((59 - rtc.second()));
 
-    u8g2.setFont(u8g2_font_5x7_tf);
-    txtNextRow(0);
-    u8g2.print(F("days   hours  mins    secs"));
-    txtNextRow(0);
+      u8g2.setFont(u8g2_font_5x7_tf);
+      txtNextRow(0);
+      u8g2.print(F("days   hours  mins    secs"));
+      txtNextRow(0);
 
-    txtNextRow(2);
+      txtNextRow(2);
 
-    u8g2.print(F("Now is:  "));
-    displayISODate(rtc.day(), rtc.month(), rtc.year());
-    u8g2.print(' ');
-    displayTime(rtc.hour(), rtc.minute(), 60);
-    txtNextRow(2);
+      u8g2.print(F("Now is:  "));
+      displayISODate(rtc.day(), rtc.month(), rtc.year());
+      u8g2.print(' ');
+      displayTime(rtc.hour(), rtc.minute(), 60);
+      txtNextRow(2);
 
-    u8g2.print(F("Alarm:   "));
-    displayISODate(alarmDay(next_alarm), alarmMonth(next_alarm), alarmYear(next_alarm));
-    u8g2.print(' ');
-    displayTime(alarmHour(next_alarm), alarmMinute(next_alarm), 60);
+      u8g2.print(F("Alarm:   "));
+      displayISODate(alarmDay(next_alarm), alarmMonth(next_alarm), alarmYear(next_alarm));
+      u8g2.print(' ');
+      displayTime(alarmHour(next_alarm), alarmMinute(next_alarm), 60);
+    }
   } while ( u8g2.nextPage() );
+  sx += dx;
+  if (sx > max_x || sx < 1) dx = -dx;
+  sy += dy;
+  if (sy > max_y || sy < 1) dy = -dy;
 }
 
 // Settings functions
@@ -403,7 +420,7 @@ void setDateAndTimeMenu(void) {
     rtc.day(),
     rtc.dayOfWeek()
   };
-  uint8_t limitLo[] = {0, 0, 0, 0, 1, 1, 0};
+  const uint8_t limitLo[] = {0, 0, 0, 0, 1, 1, 0};
   uint8_t limitHi[] = {24, 60, 60, 100, 12, 31, 7};
 
   u8g2.setFont(u8g2_font_5x7_tf);
@@ -604,12 +621,16 @@ void setup(void) {
 
 void loop(void) {
   const uint8_t num_states = 3;
-  static uint8_t upd_sec, state = 0;
-  rtc.refresh();
+  static uint8_t state = 0;
   Buttons::update();
 
   if (Buttons::changed) {
     state = (state + num_states + Buttons::justPressed(BTN_UP) - Buttons::justPressed(BTN_DOWN)) % num_states;
+    last_sec = -1; // Force refresh
+  }
+
+  if(state != 2 && next_alarm != ~0) {
+      rtc.refresh();
   }
 
   if (Buttons::justPressed(BTN_SET)) {
@@ -623,14 +644,6 @@ void loop(void) {
     }
   }
 
-  if (upd_sec == rtc.second() && !Buttons::changed) return;
-  upd_sec = rtc.second();
-
-  if(next_alarm <= nowToAlarm()) {
-    triggerAlarm();
-    return;
-  }
-
   switch (state) {
     case 0:
       infoTimeDate();
@@ -641,6 +654,11 @@ void loop(void) {
     default:
       infoAlarm();
     break;
+  }
+
+  if(next_alarm <= nowToAlarm()) {
+    triggerAlarm();
+    return;
   }
 }
 
